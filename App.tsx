@@ -18,14 +18,19 @@ const normalizeTime = (time: string | null) => {
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? (JSON.parse(saved) as AppState) : {
+    if (saved) {
+      const parsed = JSON.parse(saved) as AppState;
+      // Siempre resetear estados temporales al recargar
+      return { ...parsed, loading: false, error: null };
+    }
+    return {
       currentPlanilla: null,
       history: [],
       loading: false,
       error: null,
     };
   });
-  
+
   const [currentTime, setCurrentTime] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState('');
   const [showHistory, setShowHistory] = useState(false);
@@ -61,7 +66,7 @@ const App: React.FC = () => {
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!isDragging) return;
     const touch = e.touches[0];
-    
+
     let newX = touch.clientX - dragOffset.current.x;
     let newY = touch.clientY - dragOffset.current.y;
 
@@ -82,33 +87,59 @@ const App: React.FC = () => {
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
+    console.log("[App] Archivo seleccionado:", file?.name);
     if (!file) return;
     setState(prev => ({ ...prev, loading: true, error: null }));
+    console.log("[App] Estado establecido a loading: true");
     try {
       const reader = new FileReader();
       reader.onloadend = async () => {
-        const result = await parseScheduleFromImage(reader.result as string);
-        const newP: SavedPlanilla = {
-          id: Date.now().toString(),
-          routeNumber: result.routeNumber || 'N/A',
-          planillaNumber: result.planillaNumber || 'N/A',
-          headers: result.headers,
-          grid: result.grid.map(normalizeTime),
-          date: new Date().toISOString(),
-        };
-        setState(prev => ({ 
-          ...prev,
-          currentPlanilla: { ...newP },
-          history: [newP, ...prev.history],
-          loading: false, 
-          error: null 
-        }));
-        setShowHistory(false);
-        // Resetear posición al cargar nueva
-        setBoxPos({ x: (window.innerWidth / 2) - 100, y: window.innerHeight - 380 });
+        console.log("[App] FileReader finalizado. Iniciando parseScheduleFromImage...");
+        try {
+          const result = await parseScheduleFromImage(reader.result as string);
+          console.log("[App] Resultado recibido de Groq:", result);
+
+          const duplicate = state.history.find(p => p.routeNumber === result.routeNumber && p.planillaNumber === result.planillaNumber);
+
+          const newP: SavedPlanilla = {
+            id: Date.now().toString(),
+            routeNumber: result.routeNumber || 'N/A',
+            planillaNumber: result.planillaNumber || 'N/A',
+            headers: result.headers,
+            grid: result.grid.map(normalizeTime),
+            date: new Date().toISOString(),
+          };
+
+          if (duplicate) {
+            console.log("[App] Planilla duplicada detectada. Mostrando sin guardar.");
+            setState(prev => ({
+              ...prev,
+              currentPlanilla: { ...newP },
+              // NO agregamos al historial
+              loading: false,
+              error: `Planilla cargada pero NO guardada (Ya existe en el historial)`
+            }));
+          } else {
+            console.log("[App] Guardando nueva planilla.");
+            setState(prev => ({
+              ...prev,
+              currentPlanilla: { ...newP },
+              history: [newP, ...prev.history],
+              loading: false,
+              error: null
+            }));
+          }
+
+          setShowHistory(false);
+          setBoxPos({ x: (window.innerWidth / 2) - 100, y: window.innerHeight - 380 });
+        } catch (innerErr: any) {
+          console.error("[App] Error processing image inside onloadend:", innerErr);
+          setState(prev => ({ ...prev, loading: false, error: innerErr.message || "Error al procesar la imagen" }));
+        }
       };
       reader.readAsDataURL(file);
     } catch (err: any) {
+      console.error("[App] Error general en handleFileUpload:", err);
       setState(prev => ({ ...prev, loading: false, error: err.message }));
     }
   };
@@ -132,16 +163,16 @@ const App: React.FC = () => {
     const target = new Date();
     target.setHours(h, m, 0, 0);
     const diff = Math.floor((target.getTime() - currentTime.getTime()) / 1000);
-    
+
     if (diff < 0) return "Llegada inminente";
-    
+
     const mins = Math.floor(diff / 60);
     const secs = diff % 60;
     return { mins, secs };
   }, [nextPoint, currentTime, currentP]);
 
   const groupedHistory = useMemo(() => {
-    const filtered = state.history.filter(p => 
+    const filtered = state.history.filter(p =>
       p.routeNumber.includes(searchTerm) || p.planillaNumber.includes(searchTerm)
     );
     const groups: Record<string, SavedPlanilla[]> = {};
@@ -159,8 +190,8 @@ const App: React.FC = () => {
       <header className="bg-[#0f172a]/95 backdrop-blur-xl border-b border-slate-800 px-4 py-3 sticky top-0 z-[60] flex justify-between items-center h-16 shadow-lg">
         <div className="flex items-center gap-2">
           {currentP && (
-            <button 
-              onClick={() => { if(confirm("¿Cerrar planilla actual?")) setState(s => ({...s, currentPlanilla: null})); }} 
+            <button
+              onClick={() => { if (confirm("¿Cerrar planilla actual?")) setState(s => ({ ...s, currentPlanilla: null })); }}
               className="p-2 bg-slate-800/50 hover:bg-red-900/40 text-slate-400 hover:text-red-400 rounded-xl transition-all border border-slate-700/50"
               title="Cerrar planilla"
             >
@@ -192,8 +223,8 @@ const App: React.FC = () => {
           </div>
 
           {/* Historial Toggle */}
-          <button 
-            onClick={() => setShowHistory(!showHistory)} 
+          <button
+            onClick={() => setShowHistory(!showHistory)}
             className={`p-2.5 rounded-xl transition-all ${showHistory ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'bg-slate-800/40 text-slate-400 border border-slate-700/50'}`}
           >
             <HistoryIcon size={18} />
@@ -206,7 +237,7 @@ const App: React.FC = () => {
           <div className="space-y-4 animate-in fade-in slide-in-from-right duration-300 pb-10">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-              <input 
+              <input
                 className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-4 pl-10 pr-4 font-bold text-sm text-white focus:ring-2 focus:ring-blue-600 outline-none transition-all placeholder:text-slate-600 shadow-xl"
                 placeholder="Buscar por Ruta..."
                 value={searchTerm}
@@ -217,7 +248,7 @@ const App: React.FC = () => {
               <div className="py-20 text-center opacity-30 font-black uppercase tracking-widest text-xs">No hay registros</div>
             ) : groupedHistory.map(([route, items]) => (
               <div key={route} className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-lg">
-                <button 
+                <button
                   onClick={() => {
                     const n = new Set(expandedRoutes);
                     n.has(route) ? n.delete(route) : n.add(route);
@@ -230,18 +261,18 @@ const App: React.FC = () => {
                     <span className="font-black text-slate-300 uppercase text-xs tracking-widest">{route}</span>
                     <span className="bg-slate-800 text-slate-500 text-[10px] px-2 py-0.5 rounded-full font-bold">{items.length}</span>
                   </div>
-                  {expandedRoutes.has(route) ? <ChevronDown size={18} className="text-slate-600"/> : <ChevronRight size={18} className="text-slate-600"/>}
+                  {expandedRoutes.has(route) ? <ChevronDown size={18} className="text-slate-600" /> : <ChevronRight size={18} className="text-slate-600" />}
                 </button>
                 {expandedRoutes.has(route) && (
                   <div className="divide-y divide-slate-800">
                     {items.map(p => (
-                      <div key={p.id} className="p-4 flex justify-between items-center hover:bg-blue-600/10 cursor-pointer transition-colors group" onClick={() => { setState(s => ({...s, currentPlanilla: p})); setShowHistory(false); }}>
+                      <div key={p.id} className="p-4 flex justify-between items-center hover:bg-blue-600/10 cursor-pointer transition-colors group" onClick={() => { setState(s => ({ ...s, currentPlanilla: p })); setShowHistory(false); }}>
                         <div className="flex flex-col">
-                           <span className="font-bold text-white text-sm">Planilla #{p.planillaNumber}</span>
-                           <span className="text-[10px] text-slate-500 font-bold">{new Date(p.date).toLocaleDateString()}</span>
+                          <span className="font-bold text-white text-sm">Planilla #{p.planillaNumber}</span>
+                          <span className="text-[10px] text-slate-500 font-bold">{new Date(p.date).toLocaleDateString()}</span>
                         </div>
-                        <button onClick={(e) => { e.stopPropagation(); setState(s => ({...s, history: s.history.filter(x => x.id !== p.id)})); }} className="p-2 text-slate-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
-                          <Trash2 size={16}/>
+                        <button onClick={(e) => { e.stopPropagation(); setState(s => ({ ...s, history: s.history.filter(x => x.id !== p.id) })); }} className="p-2 text-slate-600 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     ))}
@@ -252,24 +283,34 @@ const App: React.FC = () => {
           </div>
         ) : currentP ? (
           <div className="flex flex-col pb-10">
+            {/* INFORMACIÓN DE RUTA Y PLANILLA */}
+            <div className="flex justify-between items-center mb-4 px-2">
+              <div className="bg-slate-900/60 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-800 shadow-lg">
+                <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mr-2">Ruta</span>
+                <span className="text-white font-black text-lg tracking-tight">{currentP.routeNumber}</span>
+              </div>
+              <div className="bg-slate-900/60 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-800 shadow-lg">
+                <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mr-2">Planilla</span>
+                <span className="text-blue-400 font-black text-lg tracking-tight">#{currentP.planillaNumber}</span>
+              </div>
+            </div>
             {/* PLANILLA DE HORARIOS CON ENCABEZADOS FIJOS (STICKY) */}
             <div className="bg-slate-900/40 rounded-[2.5rem] border border-slate-800 overflow-hidden shadow-2xl">
-              <div className="grid grid-cols-5 bg-slate-900 sticky top-16 z-50 border-b border-slate-800 shadow-md">
+              <div className="grid grid-cols-5 bg-slate-900 border-b border-slate-800 shadow-md">
                 {currentP.headers.map((h, i) => (
                   <div key={i} className="p-4 text-center text-[10px] font-black text-slate-500 uppercase tracking-tighter truncate">{h}</div>
                 ))}
               </div>
-              
+
               <div className="grid grid-cols-5 p-3 gap-1.5">
                 {currentP.grid.map((time, idx) => {
                   const isNext = nextPoint?.i === idx;
                   const isPast = time && !isNext && time < nowStr;
                   return (
-                    <div key={idx} className={`h-16 flex items-center justify-center rounded-2xl border font-mono font-black transition-all duration-500 ${
-                      !time ? 'bg-slate-950/20 border-transparent opacity-10' :
+                    <div key={idx} className={`h-16 flex items-center justify-center rounded-2xl border font-mono font-black transition-all duration-500 ${!time ? 'bg-slate-950/20 border-transparent opacity-10' :
                       isNext ? 'bg-blue-600 text-white border-blue-400 shadow-[0_0_30px_rgba(37,99,235,0.4)] scale-105 z-10 text-lg' :
-                      isPast ? 'bg-[#020617] border-slate-900 text-slate-800 text-sm' : 'bg-slate-800/40 border-slate-800 text-slate-400 text-sm'
-                    }`}>
+                        isPast ? 'bg-[#020617] border-slate-900 text-slate-800 text-sm' : 'bg-slate-800/40 border-slate-800 text-slate-400 text-sm'
+                      }`}>
                       {time}
                     </div>
                   );
@@ -278,10 +319,10 @@ const App: React.FC = () => {
             </div>
 
             {/* RECUADRO DEL TIEMPO (ARRASTRABLE) */}
-            <div 
+            <div
               ref={boxRef}
-              style={{ 
-                left: `${boxPos.x}px`, 
+              style={{
+                left: `${boxPos.x}px`,
                 top: `${boxPos.y}px`,
                 touchAction: 'none',
                 cursor: isDragging ? 'grabbing' : 'grab'
@@ -309,10 +350,7 @@ const App: React.FC = () => {
                   <div className="absolute top-0 left-0 w-full h-[3px] bg-slate-900/50">
                     <div className="h-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)] transition-all duration-1000" style={{ width: `${((nextPoint.i + 1) / currentP.grid.length) * 100}%` }}></div>
                   </div>
-                  <div className="flex items-center gap-1.5 mb-2 pointer-events-none">
-                    <MapPin className="text-blue-500" size={10} />
-                    <span className="text-slate-400 font-bold text-[9px] uppercase tracking-wider">{currentP.headers[nextPoint.i % 5]}</span>
-                  </div>
+
                   <div className="flex items-baseline text-white tabular-nums mb-2 pointer-events-none">
                     <span className="text-5xl font-black tracking-tight leading-none">{diffText?.mins}</span>
                     <span className="text-blue-500 font-bold text-xs ml-0.5 mr-2">m</span>
@@ -330,8 +368,8 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <div className="bg-red-600 p-4 rounded-[1.5rem] text-center text-white shadow-2xl border border-red-500">
-                   <h2 className="text-[10px] font-black uppercase tracking-tighter">Llegada Ya</h2>
-                   <p className="text-[8px] font-bold opacity-80 uppercase">{currentP.headers[nextPoint.i % 5]}</p>
+                  <h2 className="text-[10px] font-black uppercase tracking-tighter">Llegada Ya</h2>
+                  <p className="text-[8px] font-bold opacity-80 uppercase">{currentP.headers[nextPoint.i % 5]}</p>
                 </div>
               )}
             </div>
@@ -362,15 +400,26 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {state.error && (
-        <div className="fixed bottom-10 left-4 right-4 bg-red-600 text-white p-5 rounded-3xl flex items-center gap-4 shadow-2xl border border-red-500 z-[110]">
-          <AlertCircle size={20} className="shrink-0" />
-          <span className="font-black text-xs">{state.error}</span>
-          <button onClick={() => setState(s => ({...s, error: null}))} className="ml-auto p-1"><X size={16}/></button>
-        </div>
-      )}
+      {state.error && <ErrorMessage message={state.error} onClose={() => setState(s => ({ ...s, error: null }))} />}
     </div>
   );
 };
+
+// Componente auxiliar para manejar el timeout del error
+const ErrorMessage = ({ message, onClose }: { message: string, onClose: () => void }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 10000);
+    return () => clearTimeout(timer);
+  }, [message, onClose]);
+
+  return (
+    <div className="fixed bottom-10 left-4 right-4 bg-red-600/90 backdrop-blur-md text-white p-5 rounded-3xl flex items-center gap-4 shadow-2xl border border-red-500 z-[110] animate-in slide-in-from-bottom duration-500">
+      <AlertCircle size={20} className="shrink-0" />
+      <span className="font-black text-xs">{message}</span>
+      <button onClick={onClose} className="ml-auto p-1 hover:bg-red-700/50 rounded-lg transition-colors"><X size={16} /></button>
+    </div>
+  );
+};
+
 
 export default App;
