@@ -1,0 +1,7 @@
+{
+  "name": "RutaTime - Gestor de Horarios",
+  "description": "Una aplicación inteligente para conductores y trabajadores que extrae horarios de fotos y calcula el tiempo restante entre puntos de control.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
