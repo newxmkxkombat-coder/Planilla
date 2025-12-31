@@ -89,6 +89,19 @@ const App: React.FC = () => {
     const file = event.target.files?.[0];
     console.log("[App] Archivo seleccionado:", file?.name);
     if (!file) return;
+
+    // Obtener API Key de localStorage o pedirla
+    let apiKey = localStorage.getItem('GROQ_API_KEY');
+    if (!apiKey) {
+      const input = prompt("Por favor ingresa tu API Key de Groq (gsk_...):");
+      if (!input) {
+        alert("Se requiere una API Key para procesar la imagen.");
+        return;
+      }
+      apiKey = input.trim();
+      localStorage.setItem('GROQ_API_KEY', apiKey);
+    }
+
     setState(prev => ({ ...prev, loading: true, error: null }));
     console.log("[App] Estado establecido a loading: true");
     try {
@@ -96,7 +109,7 @@ const App: React.FC = () => {
       reader.onloadend = async () => {
         console.log("[App] FileReader finalizado. Iniciando parseScheduleFromImage...");
         try {
-          const result = await parseScheduleFromImage(reader.result as string);
+          const result = await parseScheduleFromImage(reader.result as string, apiKey || "");
           console.log("[App] Resultado recibido de Groq:", result);
 
           const duplicate = state.history.find(p => p.routeNumber === result.routeNumber && p.planillaNumber === result.planillaNumber);
@@ -134,6 +147,10 @@ const App: React.FC = () => {
           setBoxPos({ x: (window.innerWidth / 2) - 100, y: window.innerHeight - 380 });
         } catch (innerErr: any) {
           console.error("[App] Error processing image inside onloadend:", innerErr);
+          // Si el error es de autorización, borrar la key para pedirla de nuevo
+          if (innerErr.message.includes("401") || innerErr.message.includes("Key")) {
+            localStorage.removeItem('GROQ_API_KEY');
+          }
           setState(prev => ({ ...prev, loading: false, error: innerErr.message || "Error al procesar la imagen" }));
         }
       };
