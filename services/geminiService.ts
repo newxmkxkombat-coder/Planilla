@@ -1,54 +1,78 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
+import Groq from "groq-sdk";
 import { ExtractionResult } from "../types";
 
 export const parseScheduleFromImage = async (base64Image: string): Promise<ExtractionResult> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
+  const apiKey = process.env.GROQ_API_KEY;
+  console.log("[Groq Service] Iniciando servicio. API Key presente:", !!apiKey);
+
+  if (!apiKey) {
+    console.error("[Groq Service] Falta la API Key");
+    throw new Error("GROQ_API_KEY no encontrada. Asegúrate de configurarla en tu archivo .env y reiniciar la terminal.");
+  }
+
+  const groq = new Groq({
+    apiKey,
+    dangerouslyAllowBrowser: true
+  });
+
+  console.log("[Groq Service] Cliente creado. Enviando petición a modelo...");
+
   const prompt = `
-    Analiza esta imagen de una planilla de horarios de transporte.
-    Busca y extrae con máxima prioridad:
-    1. 'routeNumber': El número de la ruta (suele decir RUTA o estar en un círculo/esquina).
-    2. 'planillaNumber': El número de la planilla (ID único).
-    3. 'headers': Los 5 nombres de los puntos de control (ej: P19C, P25, P55...).
-    4. 'grid': Los horarios en formato HH:mm en una lista plana de 5 columnas.
-    IMPORTANTE: Si un horario está incompleto o borroso, intenta deducirlo. Si la celda está vacía, usa null.
-    Responde estrictamente en formato JSON.
+    ACTÚA COMO UN DIGITALIZADOR DE DATOS EXPERTO.
+    Tu misión es extraer CADA UNA de las horas visibles en esta planilla de transporte, SIN OMITIR NINGUNA FILA.
+    
+    Estructura de salida JSON requerida:
+    1. 'routeNumber': Número de la ruta (ej: "4", "R-10").
+    2. 'planillaNumber': Número de planilla/unidad.
+    3. 'headers': Array con los 5 nombres de los encabezados de columna encontrados.
+    4. 'grid': Array PLANO (unidimensional) con TODOS los horarios, fila por fila.
+       - IMPORTANTE: Debes recorrer la tabla completa de arriba a abajo.
+       - Si la tabla tiene muchas filas, extráelas TODAS. No pares a la mitad.
+       - Formato de hora: "HH:mm".
+       - Si una celda está vacía, usa null.
+
+    No inventes datos, pero intenta corregir errores OCR obvios (ej: 'B' -> '8').
+    Responde SOLO con el JSON válido.
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: {
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              mimeType: "image/jpeg",
-              data: base64Image.split(',')[1] || base64Image
-            }
-          }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            routeNumber: { type: Type.STRING },
-            planillaNumber: { type: Type.STRING },
-            headers: { type: Type.ARRAY, items: { type: Type.STRING } },
-            grid: { type: Type.ARRAY, items: { type: Type.STRING, nullable: true } }
-          },
-          required: ["routeNumber", "planillaNumber", "headers", "grid"]
-        }
-      }
+    const completionPromise = groq.chat.completions.create({
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: prompt,
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: base64Image,
+              },
+            },
+          ],
+        },
+      ],
+      model: "meta-llama/llama-4-scout-17b-16e-instruct",
+      response_format: { type: "json_object" },
+      temperature: 0,
+      max_tokens: 7000,
     });
 
-    const jsonStr = response.text || "{}";
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("La solicitud excedió el tiempo límite de 60 segundos.")), 60000)
+    );
+
+    const completion = await Promise.race([completionPromise, timeoutPromise]) as any;
+
+    const jsonStr = completion.choices[0]?.message?.content || "{}";
+    console.log("[Groq Service] Respuesta cruda:", jsonStr);
     return JSON.parse(jsonStr) as ExtractionResult;
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    throw new Error("No se pudo leer la planilla. Asegúrate de que los números de Ruta y Planilla sean visibles.");
+
+  } catch (error: any) {
+    console.error("Groq Error:", error);
+    const msg = error?.message || JSON.stringify(error) || "Error desconocido";
+    throw new Error(`Error de Groq: ${msg}. Revisa tu API Key y asegúrate de reiniciar el servidor.`);
   }
 };
